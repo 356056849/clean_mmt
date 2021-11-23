@@ -100,7 +100,7 @@ class MMTwins(BaseModel):
     self.vid_bert_params = vid_bert_params
     self.normalize_experts = normalize_experts
 
-    self.rep_dim = 4096
+    self.rep_dim = 512
     self.proj_dim = 4096
 
     self.video_dim_reduce = nn.ModuleDict()
@@ -494,8 +494,8 @@ class MMTwins(BaseModel):
 
     if out == 'conf':  # Output confusion matrix
       cross_view_conf_matrix = sharded_cross_view_inner_product(
-          vid_rep=vid_reps,
-          txt_rep=txt_reps,
+          vid_rep=vid_embd_CL,
+          txt_rep=txt_embd_CL,
           subspaces=self.modalities
       )
       return {
@@ -514,8 +514,10 @@ class MMTwins(BaseModel):
       }
     else:  # Output the embeddings
       return {
-          'vid_reps': vid_reps,
-          'text_reps': txt_reps,
+          'vid_reps': vid_embd_CL,
+          'vid_embd_CL': vid_embd_CL,
+          'text_reps': txt_embd_CL,
+          'text_embd_CL': txt_embd_CL
       }
 
   def display_minibatch(self, token_ids, input_ids, attention_mask,

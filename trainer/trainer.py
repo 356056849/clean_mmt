@@ -19,6 +19,7 @@ https://github.com/albanie/collaborative-experts
 """
 
 import collections
+import os
 import logging
 import pathlib
 import sys
@@ -29,13 +30,14 @@ import time
 
 from base import BaseTrainer
 # from model.model import sharded_cross_view_inner_product
-from model.MMTwins import sharded_cross_view_inner_product
+from model.MMTwins import sharded_cross_view_inner_product, cpt_cross_corrletaion_matrix
 import numpy as np
 import pytorch_warmup as warmup
 import torch
 from utils.util import compress_predictions
 
 from model.loss import BarlowTwinsLoss
+from torchvision.utils import save_image
 
 logger = logging.getLogger(__name__)
 
@@ -307,7 +309,9 @@ class Trainer(BaseTrainer):
       paths_list = []
       # added by wang.jiachen ---- 2021.11.23
       vid_reps_list = []
+      vid_embd_CL_list = []
       txt_reps_list = []
+      txt_embd_CL_list = []
       logger.debug("Running batches through model ...")
       data_start = time.time()
       for batch_idx, minibatch in enumerate(val_loader):
@@ -350,7 +354,9 @@ class Trainer(BaseTrainer):
                             debug=debug)
 
         vid_reps_list.append(output["vid_reps"])
+        vid_embd_CL_list.append(output["vid_embd_CL"])
         txt_reps_list.append(output["text_reps"])
+        txt_embd_CL_list.append(output["text_embd_CL"])
 
         self.timer.update("valid_batch.forward", time.time() - forward_start)
         self.timer.update("valid_batch.total", time.time() - data_start)
@@ -359,13 +365,17 @@ class Trainer(BaseTrainer):
 
       query_masks = torch.cat(query_masks_list, 0)
       vid_reps = torch.cat(vid_reps_list, 0)
+      vid_embd_CL = torch.cat(vid_embd_CL_list, 0)
       txt_reps = torch.cat(txt_reps_list, 0)    
+      txt_embd_CL = torch.cat(txt_embd_CL_list, 0)
 
       token_ids = np.concatenate(token_ids_list)
 
       res = {
           "vid_reps": vid_reps,
+          "vid_embd_CL": vid_embd_CL,
           "text_reps": txt_reps,
+          "text_embd_CL": txt_embd_CL,
           "raw_captions": raw_captions_list,
           "token_ids": token_ids,
           "query_masks": query_masks,
@@ -405,6 +415,21 @@ class Trainer(BaseTrainer):
             txt_rep=embds["text_reps"],
             subspaces=self.modalities
         )
+        # debug corr mat ----------------------------------
+        corrletaion_matrix = cpt_cross_corrletaion_matrix(
+          vid_embd_CL=embds["vid_embd_CL"],
+          txt_embd_CL=embds["text_embd_CL"],
+          subspaces=self.modalities
+        )
+        if not os.path.exists('debug'):
+          os.mkdir('debug')
+        min_val, max_val = torch.min(corrletaion_matrix), torch.max(corrletaion_matrix)
+        norm_corr = (corrletaion_matrix - min_val) / (max_val - min_val)
+        save_image(norm_corr, 'debug/corr_mat.jpg')
+        min_val, max_val = torch.min(cross_view_conf_matrix), torch.max(cross_view_conf_matrix)
+        norm_conf = (cross_view_conf_matrix - min_val) / (max_val - min_val)
+        save_image(norm_conf, 'debug/conf_mat.jpg')
+        # debug corr mat ----------------------------------
         sims = cross_view_conf_matrix.data.cpu().float().numpy()
         query_masks = embds["query_masks"].numpy()
 
