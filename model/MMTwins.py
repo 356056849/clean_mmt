@@ -489,8 +489,8 @@ class MMTwins(BaseModel):
     txt_reps = self.txt_avg2rep(text_avg)
 
     # projection for contrastive learning
-    vid_embd_CL = self.vid_projector(vid_reps)
-    txt_embd_CL = self.txt_projector(txt_reps)
+    vid_embd_CL = self.bn(self.vid_projector(vid_reps))
+    txt_embd_CL = self.bn(self.vid_projector(txt_reps))
 
     if out == 'conf':  # Output confusion matrix
       cross_view_conf_matrix = sharded_cross_view_inner_product(
@@ -515,7 +515,7 @@ class MMTwins(BaseModel):
     else:  # Output the embeddings
       return {
           'vid_reps': vid_reps,
-          'text_reps': txt_embd_CL,
+          'text_reps': txt_reps,
       }
 
   def display_minibatch(self, token_ids, input_ids, attention_mask,
@@ -651,7 +651,7 @@ def sharded_cross_view_inner_product(vid_rep,
   
   txt_rep_norm = F.normalize(txt_rep, dim=1)
   vid_rep_norm = F.normalize(vid_rep, dim=1)
-  sims = th.matmul(txt_rep_norm, vid_rep_norm.T)
+  sims = txt_rep_norm @ vid_rep_norm.T
   return sims
 
 
