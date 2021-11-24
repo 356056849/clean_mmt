@@ -489,8 +489,8 @@ class MMTwins(BaseModel):
     txt_reps = self.txt_avg2rep(text_avg)
 
     # projection for contrastive learning
-    vid_embd_CL = self.bn(self.vid_projector(vid_reps))
-    txt_embd_CL = self.bn(self.vid_projector(txt_reps))
+    vid_embd_CL = self.vid_projector(vid_reps)
+    txt_embd_CL = self.vid_projector(txt_reps)
 
     if out == 'conf':  # Output confusion matrix
       cross_view_conf_matrix = sharded_cross_view_inner_product(
@@ -665,5 +665,7 @@ def cpt_cross_corrletaion_matrix(vid_embd_CL,
   #vid_embd_CL_norm = F.normalize(vid_embd_CL, dim=1)
   #txt_embd_CL_norm = F.normalize(txt_embd_CL, dim=1)
 
-  cross_corr_mat = vid_embd_CL.T @ txt_embd_CL
+  txt_rep_norm = F.normalize(txt_embd_CL, dim=0)
+  vid_rep_norm = F.normalize(vid_embd_CL, dim=0)
+  cross_corr_mat = txt_rep_norm.T @ vid_rep_norm
   return cross_corr_mat

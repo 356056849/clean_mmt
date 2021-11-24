@@ -100,6 +100,7 @@ class BarlowTwinsLoss(nn.Module):
   def __init__(self, lambd=0.0051):
     super().__init__()
     self.lambd =lambd
+    self.loss = nn.CrossEntropyLoss()
   
   def off_diagonal(self, x):
     # return a flattened view of the off-diagonal elements of a square matrix
@@ -108,9 +109,15 @@ class BarlowTwinsLoss(nn.Module):
     return x.flatten()[:-1].view(n - 1, n + 1)[:, 1:].flatten()
 
   def forward(self, c):
+    """
     on_diag = th.diagonal(c).add_(-1).pow_(2).sum()
     off_diag = self.off_diagonal(c).pow_(2).sum()
     loss = on_diag + self.lambd * off_diag
+    """
+    c /= 0.07
+    d = c.shape[0]
+    target = th.arange(d).cuda()
+    loss = self.loss(c, target) + self.loss(th.transpose(c, 0, 1), target)
     return loss
 
 if __name__ == '__main__':
