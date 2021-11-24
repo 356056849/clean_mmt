@@ -101,7 +101,7 @@ class MMTwins(BaseModel):
     self.normalize_experts = normalize_experts
 
     self.rep_dim = 512
-    self.proj_dim = 4096
+    self.proj_dim = 8192
 
     self.video_dim_reduce = nn.ModuleDict()
     for mod in self.modalities:
@@ -182,7 +182,7 @@ class MMTwins(BaseModel):
     self.vid_avg2rep = nn.Linear(same_dim, self.rep_dim, bias=False)
 
     # projection head for contrastive learning
-    sizes = [self.rep_dim, self.proj_dim, self.proj_dim]
+    sizes = [self.rep_dim, self.proj_dim]
     layers = []
     for i in range(len(sizes) - 2):
         layers.append(nn.Linear(sizes[i], sizes[i + 1], bias=False))
