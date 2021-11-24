@@ -182,23 +182,14 @@ class MMTwins(BaseModel):
     self.vid_avg2rep = nn.Linear(same_dim, self.rep_dim, bias=False)
 
     # projection head for contrastive learning
-    sizes = [self.rep_dim, self.proj_dim]
+    sizes = [self.rep_dim, self.proj_dim, self.proj_dim]
     layers = []
     for i in range(len(sizes) - 2):
         layers.append(nn.Linear(sizes[i], sizes[i + 1], bias=False))
         layers.append(nn.BatchNorm1d(sizes[i + 1]))
         layers.append(nn.ReLU(inplace=True))
     layers.append(nn.Linear(sizes[-2], sizes[-1], bias=False))
-    self.txt_projector = nn.Sequential(*layers)
-    # self.txt_projector = nn.Sequential()
-    layers = []
-    for i in range(len(sizes) - 2):
-        layers.append(nn.Linear(sizes[i], sizes[i + 1], bias=False))
-        layers.append(nn.BatchNorm1d(sizes[i + 1]))
-        layers.append(nn.ReLU(inplace=True))
-    layers.append(nn.Linear(sizes[-2], sizes[-1], bias=False))
-    self.vid_projector = nn.Sequential(*layers)
-    #self.vid_projector = nn.Sequential()
+    self.projector = nn.Sequential(*layers)
 
     # normalization layer for the representations z1 and z2
     self.bn = nn.BatchNorm1d(self.proj_dim, affine=False)
@@ -489,13 +480,13 @@ class MMTwins(BaseModel):
     txt_reps = self.txt_avg2rep(text_avg)
 
     # projection for contrastive learning
-    vid_embd_CL = self.vid_projector(vid_reps)
-    txt_embd_CL = self.vid_projector(txt_reps)
+    vid_embd_CL = self.projector(vid_reps)
+    txt_embd_CL = self.projector(txt_reps)
 
     if out == 'conf':  # Output confusion matrix
       cross_view_conf_matrix = sharded_cross_view_inner_product(
-          vid_rep=vid_embd_CL,
-          txt_rep=txt_embd_CL,
+          vid_rep=vid_reps,
+          txt_rep=txt_reps,
           subspaces=self.modalities
       )
       return {
