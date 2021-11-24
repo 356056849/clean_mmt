@@ -89,7 +89,6 @@ class Visualizer:
           "gt-rank": np.where(sorted_ranks[ii] == gt_candidate_idx)[0][0],
           "gt-path": meta["paths"][gt_candidate_idx],
           "ranked_idx": ranked_idx,
-          "top-k-vid_weights": np.array(meta["vid_weights"])[ranked_idx],
           "top-k-sims": -dists[ii][ranked_idx],
           "top-k-paths": np.array(meta["paths"])[ranked_idx],
           "hide-gt": hide_gt,

@@ -425,10 +425,10 @@ class Trainer(BaseTrainer):
           os.mkdir('debug')
         min_val, max_val = torch.min(corrletaion_matrix), torch.max(corrletaion_matrix)
         norm_corr = (corrletaion_matrix - min_val) / (max_val - min_val)
-        save_image(norm_corr, 'debug/corr_mat.jpg')
+        save_image(norm_corr, 'debug/corr_mat_{}.jpg'.format(epoch))
         min_val, max_val = torch.min(cross_view_conf_matrix), torch.max(cross_view_conf_matrix)
         norm_conf = (cross_view_conf_matrix - min_val) / (max_val - min_val)
-        save_image(norm_conf, 'debug/conf_mat.jpg')
+        save_image(norm_conf, 'debug/conf_mat_{}.jpg'.format(epoch))
         # debug corr mat ----------------------------------
         sims = cross_view_conf_matrix.data.cpu().float().numpy()
         query_masks = embds["query_masks"].numpy()
