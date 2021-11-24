@@ -116,7 +116,7 @@ class Visualizer:
   def display_current_results(self, rankings, epoch, metrics, modalities,
                               web_dir):
     """Create html page to visualize the rankings."""
-    visualize_weights = True
+    visualize_weights = False
 
     filepath = pathlib.Path(web_dir) / "index.html"
     if filepath.exists():
@@ -163,19 +163,21 @@ class Visualizer:
         links.append(gt_vid_path)
         vids.append(gt_vid_path)
 
-      for idx, (path, sim, vid_weights) in enumerate(
-          zip(ranking["top-k-paths"], ranking["top-k-sims"],
-              ranking["top-k-vid_weights"])):
+      for idx, (path, sim) in enumerate(
+          zip(ranking["top-k-paths"], ranking["top-k-sims"])):
+              # ranking["top-k-vid_weights"])):
         if ranking["hide-gt"]:
           txt = f"choice: {idx}"
         else:
           txt = f"<b>Rank: {idx + 1}, Sim: {sim:.3f}, [{path.stem}]"
 
+        """
         if visualize_weights:
           txt = txt + "<br><b>video weights:"
           for mod_idx, vid_weight in enumerate(vid_weights):
             mod_name = modalities[mod_idx]
             txt = txt + f"<br><b>{mod_name}: {vid_weight:.2f}"
+        """
 
         txts.append(txt)
         vid_path = str(path)
@@ -184,3 +186,4 @@ class Visualizer:
       webpage.add_videos(vids, txts, links, width=200)
     logger.debug("added %d videos", len(vids))
     webpage.save()
+
