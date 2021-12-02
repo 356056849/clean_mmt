@@ -192,10 +192,7 @@ class BaseTrainer:
         msg = f'Skipping ckpt save at epoch {epoch} < {self.skip_first_n_saves}'
         logger.info(msg)
       elif epoch % self.save_period == 0 or save_best:
-        try:
-          self._save_checkpoint(epoch, save_best=best)
-        except:
-          print('_save_checkpoint passed')
+        self._save_checkpoint(epoch, save_best=best)
 
       if epoch > self.num_keep_ckpts:
         self.purge_stale_checkpoints()

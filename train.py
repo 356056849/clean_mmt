@@ -39,7 +39,7 @@ from utils.util import compute_dims
 import utils.visualizer as module_vis
 
 logger = logging.getLogger(__name__)
-
+#os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 def train(config):
   """Cross-modal architecture training."""

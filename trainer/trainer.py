@@ -193,7 +193,9 @@ class Trainer(BaseTrainer):
       self.timer.update("train_batch.forward", time.time() - forward_start)
       loss_start = time.time()
       if out == "conf":
-        loss = self.loss(output["cross_view_conf_matrix"])
+        cross_view_conf_matrix = output["cross_view_conf_matrix"]
+        late_interaction_matrix = output["late_interaction_matrix"]
+        loss = self.loss(output["cross_view_conf_matrix"], late_interaction_matrix)
       elif out == "corr":
         loss = self.loss(output["corrletaion_matrix"])
       else:
@@ -421,14 +423,15 @@ class Trainer(BaseTrainer):
           txt_embd_CL=embds["text_embd_CL"],
           subspaces=self.modalities
         )
-        if not os.path.exists('debug'):
-          os.mkdir('debug')
+        exp_dir = self.config._save_dir
+        if not os.path.exists(os.path.join(exp_dir, 'debug')):
+          os.mkdir(os.path.join(exp_dir, 'debug'))
         min_val, max_val = torch.min(corrletaion_matrix), torch.max(corrletaion_matrix)
         norm_corr = (corrletaion_matrix - min_val) / (max_val - min_val)
-        save_image(norm_corr, 'debug/corr_mat_{}.jpg'.format(epoch))
+        save_image(norm_corr, os.path.join(exp_dir, 'debug/corr_mat_{}.jpg'.format(epoch)))
         min_val, max_val = torch.min(cross_view_conf_matrix), torch.max(cross_view_conf_matrix)
         norm_conf = (cross_view_conf_matrix - min_val) / (max_val - min_val)
-        save_image(norm_conf, 'debug/conf_mat_{}.jpg'.format(epoch))
+        save_image(norm_conf, os.path.join(exp_dir, 'debug/conf_mat_{}.jpg'.format(epoch)))
         # debug corr mat ----------------------------------
         sims = cross_view_conf_matrix.data.cpu().float().numpy()
         query_masks = embds["query_masks"].numpy()

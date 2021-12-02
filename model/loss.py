@@ -120,6 +120,38 @@ class BarlowTwinsLoss(nn.Module):
     loss = self.loss(c, target) + self.loss(th.transpose(c, 0, 1), target)
     return loss
 
+
+class MixLoss(nn.Module):
+  def __init__(self, temperature=0.07, lambd=0.00):
+    super().__init__()
+    self.ce_loss = th.nn.CrossEntropyLoss()
+    self.kl_loss = th.nn.functional.kl_div
+    self.T = temperature
+    self.lambd = lambd
+
+  def forward(self, global_conf_mat, token_wise_conf_mat):
+    global_conf_mat /= self.T
+    n = global_conf_mat.size()[0]
+    target = th.arange(n).to(global_conf_mat.device)
+
+    t2v_conf_mat = global_conf_mat
+    v2t_conf_mat = th.transpose(global_conf_mat, 0, 1)
+
+    t2v_soft_target = F.softmax(token_wise_conf_mat["t2v"], dim=-1)
+    v2t_soft_target = F.softmax(token_wise_conf_mat["v2t"], dim=-1)
+
+    global_loss = self.ce_loss(t2v_conf_mat, target) + self.ce_loss(v2t_conf_mat, target)
+    t2v_distill_loss = self.kl_loss(F.log_softmax(t2v_conf_mat, dim=-1), t2v_soft_target)
+    v2t_distill_loss = self.kl_loss(F.log_softmax(v2t_conf_mat, dim=-1), v2t_soft_target)
+    distill_loss = t2v_distill_loss + v2t_distill_loss
+    assert t2v_distill_loss > 0, "negtaive loss of {}".format(t2v_distill_loss)
+    assert v2t_distill_loss > 0, "negtaive loss of {}".format(v2t_distill_loss)
+
+    total_loss = global_loss + self.lambd * distill_loss
+
+    return total_loss
+
+
 if __name__ == '__main__':
   infoNCE = InfoNceLoss()
   confusion_matrix = th.randn([32, 32])
