@@ -28,7 +28,10 @@ import data_loader.data_loaders as module_data
 import model.loss as module_loss
 import model.metric as module_metric
 # import model.model as module_arch
-import model.MMTwins as module_arch
+# import model.MMTwins as module_arch
+# import model.EMMT as module_arch
+# import model.momentum_mmt as module_arch
+# model imported below ----------------- 
 import numpy as np
 from parse_config import ConfigParser
 import torch
@@ -84,6 +87,11 @@ def train(config):
           ))
 
   # Setup the cross-modal architecture
+  if config['arch']['type'] == 'MomentumMMT':
+    import model.momentum_mmt as module_arch
+  elif config['arch']['type'] == 'EnhancedMMT':
+    import model.HiEMMT as module_arch
+  
   model = config.init(
       name="arch",
       module=module_arch,

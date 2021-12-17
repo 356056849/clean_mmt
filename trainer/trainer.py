@@ -30,13 +30,17 @@ import time
 
 from base import BaseTrainer
 # from model.model import sharded_cross_view_inner_product
-from model.MMTwins import sharded_cross_view_inner_product, cpt_cross_corrletaion_matrix
+# from model.momentum_mmt import sharded_cross_view_inner_product, cpt_cross_corrletaion_matrix
+import model.HiEMMT as HiEMMT
+import model.momentum_mmt as momentum_mmt
+# from model.MMTwins import sharded_cross_view_inner_product, cpt_cross_corrletaion_matrix
+
 import numpy as np
 import pytorch_warmup as warmup
 import torch
 from utils.util import compress_predictions
 
-from model.loss import BarlowTwinsLoss
+from model.loss import *
 from torchvision.utils import save_image
 
 logger = logging.getLogger(__name__)
@@ -126,6 +130,36 @@ class Trainer(BaseTrainer):
           optimizer, warmup_period=warmup_iterations)
     else:
       self.warmup_scheduler = None
+    
+    # add start_distill_epoch config
+    self.start_distill_epoch = config.config['loss']['args']['start_distill_epoch']
+    print('Debug ---> start self-distillation at epoch {}.'.format(self.start_distill_epoch))
+    self.already_print_log = False
+
+    # add loss type config
+    if isinstance(self.loss, RawMixLoss):
+      self.which_loss = 'RawMixLoss'
+    elif isinstance(self.loss, MomentumMixLoss):
+      self.which_loss = 'MomentumMixLoss'
+    elif isinstance(self.loss, DCLMixLoss):
+      self.which_loss = 'DCLMixLoss'
+    elif isinstance(self.loss, HiMixLoss):
+      self.which_loss = 'HiMixLoss'
+      self.feature_loss_weight = self.loss.feature_loss_weight
+    else:
+      raise 'loss config error'
+    if self.which_loss == 'HiMixLoss':
+      print('Debug ---> use {} as objection function with weights {}.'.format(self.which_loss, self.feature_loss_weight))
+    else:
+      print('Debug ---> use {} as objection function.'.format(self.which_loss))
+
+    # choose customized sharded_cross_view_inner_product and cpt_cross_corrletaion_matrix
+    if config.config['arch']['type'] == 'MomentumMMT':
+      self.sharded_cross_view_inner_product = momentum_mmt.sharded_cross_view_inner_product
+      self.cpt_cross_corrletaion_matrix = momentum_mmt.cpt_cross_corrletaion_matrix
+    elif config.config['arch']['type'] == 'EnhancedMMT':
+      self.sharded_cross_view_inner_product = HiEMMT.sharded_cross_view_inner_product
+      self.cpt_cross_corrletaion_matrix = HiEMMT.cpt_cross_corrletaion_matrix
 
   def _train_epoch(self, epoch):
     # There is no training at epoch 0, only evaluation
@@ -139,12 +173,18 @@ class Trainer(BaseTrainer):
       log["n_steps"] = self.n_steps
       return log
 
+    if epoch >= self.start_distill_epoch:
+        distill = True
+        #if not self.already_print_log:
+          #self.already_print_log = True
+        print('Need self-distillation at epoch {}.'.format(epoch))
+    else:
+      distill = False
+  
     self.model.train()
     total_loss = 0
-    out = "embds" if isinstance(self.model, torch.nn.DataParallel) else "conf"
-    # out forced to be "corr" (using barlow twins loss) by wang.jiachen (2021.11.18)
-    if isinstance(self.loss, BarlowTwinsLoss):
-      out = 'corr'
+    #out = "embds" if isinstance(self.model, torch.nn.DataParallel) else "conf"
+    out = "conf"
 
     # Choose which of the trainsets to use (pretraining or finetuning)
     i = 0
@@ -159,16 +199,19 @@ class Trainer(BaseTrainer):
            f"n_pairs: {self.n_pairs}")
     logger.debug(msg)
 
+    torch.cuda.synchronize()
     data_start = time.time()
     for batch_idx, minibatch in enumerate(self.train_loaders[i]):
       # We limit the number of samples per epoch
       if (batch_idx
           + 1) * self.batch_size * self.n_pairs > self.max_samples_per_epoch:
         break
-
+      
+      torch.cuda.synchronize()
       self.timer.update("train_batch.data_loading", time.time() - data_start)
       dataset_name = self.train_loaders[0].dataset.dataset_name
 
+      torch.cuda.synchronize()
       transfer_start = time.time()
       # Print the minibatch data to debug the dataloader
       if self.debug_dataloader and batch_idx < 1:
@@ -186,35 +229,45 @@ class Trainer(BaseTrainer):
         self.warmup_scheduler.dampen()
 
       self.optimizer.zero_grad()
+      torch.cuda.synchronize()
       self.timer.update("train_batch.transfer", time.time() - transfer_start)
       forward_start = time.time()
       output = self.model(**minibatch, out=out, device=self.device, debug=debug)
 
+      torch.cuda.synchronize()
       self.timer.update("train_batch.forward", time.time() - forward_start)
       loss_start = time.time()
-      if out == "conf":
+ 
+      # modified ----------------------------------------------------------------------------------- forward part
+      # for EMMT model
+      if self.which_loss == 'RawMixLoss':
+        #vid_embds, txt_embds = output['vid_reps'], output['text_reps']
         cross_view_conf_matrix = output["cross_view_conf_matrix"]
         late_interaction_matrix = output["late_interaction_matrix"]
-        loss = self.loss(output["cross_view_conf_matrix"], late_interaction_matrix)
-      elif out == "corr":
-        loss = self.loss(output["corrletaion_matrix"])
-      else:
-        # Reassemble the tensors from multiple GPUs to one dict
-        vid_embds = collections.OrderedDict()
-        text_embds = collections.OrderedDict()
-        for idx, mod in enumerate(self.modalities):
-          vid_embds[mod] = output["vid_embds"][:, idx]
-          text_embds[mod] = output["text_embds"][:, idx]
-        cross_view_conf_matrix = sharded_cross_view_inner_product(
-            vid_embds=vid_embds,
-            text_embds=text_embds,
-            vid_weights=output["vid_weights"],
-            text_weights=output["text_weights"],
-            subspaces=self.modalities,
-            merge_caption_similiarities="avg",
-        )
-        loss = self.loss(cross_view_conf_matrix)
+        loss = self.loss(cross_view_conf_matrix, late_interaction_matrix, distill=distill)
+      # for momentum_mmt model
+      elif self.which_loss == 'MomentumMixLoss':
+        loss = self.loss(output, distill=distill)
+      elif self.which_loss == 'DCLMixLoss':
+        vid_embds, txt_embds = output['vid_reps'], output['text_reps']
+        late_interaction_matrix = output["late_interaction_matrix"]
+        loss = self.loss(vid_embds, txt_embds, late_interaction_matrix, distill=distill)
+      elif self.which_loss == 'HiMixLoss':
+        cross_view_conf_matrix_semantic = output["cross_view_conf_matrix_semantic"]
+        late_interaction_matrix_semantic = output["late_interaction_matrix_semantic"]
+        semantic_loss = self.loss(cross_view_conf_matrix_semantic, late_interaction_matrix_semantic, distill=distill)
+        cross_view_conf_matrix_feature = output["cross_view_conf_matrix_feature"]
+        late_interaction_matrix_feature = output["late_interaction_matrix_feature"]
+        feature_loss = self.loss(cross_view_conf_matrix_feature, late_interaction_matrix_feature, distill=distill)
+        loss = semantic_loss + self.feature_loss_weight * feature_loss
+        """
+        cross_view_conf_matrix = output["cross_view_conf_matrix"]
+        late_interaction_matrix = output["late_interaction_matrix"]
+        n_layers = len(cross_view_conf_matrix)
+        loss = self.loss(cross_view_conf_matrix[0], late_interaction_matrix[0], distill=distill) + self.loss(cross_view_conf_matrix[1], late_interaction_matrix[1], distill=distill)
+        """
 
+      torch.cuda.synchronize()
       self.timer.update("train_batch.loss", time.time() - loss_start)
       backward_start = time.time()
       loss.backward()
@@ -223,6 +276,7 @@ class Trainer(BaseTrainer):
       loss_value = loss.item()
       total_loss += loss_value
 
+      torch.cuda.synchronize()
       self.timer.update("train_batch.backward", time.time() - backward_start)
       self.timer.update("train_batch.total", time.time() - data_start)
 
@@ -311,9 +365,7 @@ class Trainer(BaseTrainer):
       paths_list = []
       # added by wang.jiachen ---- 2021.11.23
       vid_reps_list = []
-      vid_embd_CL_list = []
       txt_reps_list = []
-      txt_embd_CL_list = []
       logger.debug("Running batches through model ...")
       data_start = time.time()
       for batch_idx, minibatch in enumerate(val_loader):
@@ -356,9 +408,7 @@ class Trainer(BaseTrainer):
                             debug=debug)
 
         vid_reps_list.append(output["vid_reps"])
-        vid_embd_CL_list.append(output["vid_embd_CL"])
         txt_reps_list.append(output["text_reps"])
-        txt_embd_CL_list.append(output["text_embd_CL"])
 
         self.timer.update("valid_batch.forward", time.time() - forward_start)
         self.timer.update("valid_batch.total", time.time() - data_start)
@@ -367,17 +417,13 @@ class Trainer(BaseTrainer):
 
       query_masks = torch.cat(query_masks_list, 0)
       vid_reps = torch.cat(vid_reps_list, 0)
-      vid_embd_CL = torch.cat(vid_embd_CL_list, 0)
       txt_reps = torch.cat(txt_reps_list, 0)    
-      txt_embd_CL = torch.cat(txt_embd_CL_list, 0)
 
       token_ids = np.concatenate(token_ids_list)
 
       res = {
           "vid_reps": vid_reps,
-          "vid_embd_CL": vid_embd_CL,
           "text_reps": txt_reps,
-          "text_embd_CL": txt_embd_CL,
           "raw_captions": raw_captions_list,
           "token_ids": token_ids,
           "query_masks": query_masks,
@@ -412,15 +458,15 @@ class Trainer(BaseTrainer):
       for dataset_name, embds in loaders_embds.items():
         conf_mat_start = time.time()
         logger.debug("Computing confusion matrix ...")
-        cross_view_conf_matrix = sharded_cross_view_inner_product(
+        cross_view_conf_matrix = self.sharded_cross_view_inner_product(
             vid_rep=embds["vid_reps"],
             txt_rep=embds["text_reps"],
             subspaces=self.modalities
         )
         # debug corr mat ----------------------------------
-        corrletaion_matrix = cpt_cross_corrletaion_matrix(
-          vid_embd_CL=embds["vid_embd_CL"],
-          txt_embd_CL=embds["text_embd_CL"],
+        corrletaion_matrix = self.cpt_cross_corrletaion_matrix(
+          vid_embd_CL=embds["vid_reps"],
+          txt_embd_CL=embds["text_reps"],
           subspaces=self.modalities
         )
         exp_dir = self.config._save_dir
@@ -468,7 +514,8 @@ class Trainer(BaseTrainer):
           np.save(sims_path, sims_data)
           logger.info("Saved similarity matrix to %s", str(sims_path))
 
-        nested_metrics = {}
+        # nested_metrics = {}
+        nested_metrics = {'overall_metrics': {'rsum': 0.}}
         self.timer.update("valid.conf_mat", time.time() - conf_mat_start)
         metrics_start = time.time()
 
@@ -477,7 +524,11 @@ class Trainer(BaseTrainer):
           metric_name = metric.__name__
           logger.debug("Computing %s metric ...", metric_name)
           nested_metrics[metric_name] = metric(sims, query_masks=query_masks)
-
+          # Following HiT, wang.jiachen also adds 'rsum' metrics here
+          for k in [1, 5, 10]:
+            recall_k = "R{}".format(k)
+            nested_metrics['overall_metrics']['rsum'] += nested_metrics[metric_name][recall_k]
+          
           # Log the metrics in Tensorboard
           logger.debug("Logging %s on Tensorboard ...", metric_name)
           self.log_metrics(metric_store=nested_metrics[metric_name],

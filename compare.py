@@ -1,7 +1,7 @@
 import os
 
-n_last_epoch = 10
-exp_dir = 'exps/MSRVTT_jsfusion_clspace_cls_lambd_30_check'
+#epoch_range = (19, 29)
+exp_dir = 'exps/HiEMMT/avg_t50v20_none_linear_SD0_512to1024_sanity_check2'
 
 log_path = os.path.join(exp_dir, 'log.txt')
 with open(log_path, 'r') as f:
@@ -24,6 +24,9 @@ with open(log_path, 'r') as f:
         "MedR": [],
         "MeanR": [],
         "geometric_mean_R1-R5-R10": []
+    } 
+    overall_metrics = {
+        "rsum": []
     }
 
     for line in raw_lines:
@@ -38,9 +41,30 @@ with open(log_path, 'r') as f:
             tag = tag.split('/')[-1]
             score = float(score)
             v2t_metrics[tag].append(score)
+        elif "MSRVTT_jsfusion_test/overall_metrics/rsum" in log_info:
+            tag, score = log_info.split(': ')
+            tag = tag.split('/')[-1]
+            score = float(score)
+            overall_metrics[tag].append(score)
     
-    print(os.path.basename(exp_dir) + ':')
+    best_rsum = max(overall_metrics['rsum'])
+    best_epoch = overall_metrics['rsum'].index(best_rsum)
+    print(os.path.basename(exp_dir) + '_best {}:'.format(best_epoch))
     for key in t2v_metrics:
-        print('\tt2v_metrics/{}: {:.2f}'.format(key, sum(t2v_metrics[key][-n_last_epoch:]) / n_last_epoch))
+        print('\tt2v_metrics/{}: {:.2f}'.format(key, t2v_metrics[key][best_epoch]))
     for key in v2t_metrics:
-        print('\tt2v_metrics/{}: {:.2f}'.format(key, sum(v2t_metrics[key][-n_last_epoch:]) / n_last_epoch))
+        print('\tv2t_metrics/{}: {:.2f}'.format(key, v2t_metrics[key][best_epoch]))
+    for key in overall_metrics:
+        print('\toverall_metrics/{}: {:.2f}'.format(key, overall_metrics[key][best_epoch]))
+    
+    start = max(best_epoch - 2, 0)
+    end = min(best_epoch + 2 + 1, len(t2v_metrics['R1']))
+    print(os.path.basename(exp_dir) + '_mean:')
+    #start, end = epoch_range[0], epoch_range[1]
+    for key in t2v_metrics:
+        print('\tt2v_metrics/{}: {:.2f}'.format(key, sum(t2v_metrics[key][start:end]) / (end-start)))
+    for key in v2t_metrics:
+        print('\tv2t_metrics/{}: {:.2f}'.format(key, sum(v2t_metrics[key][start:end]) / (end-start)))
+    for key in overall_metrics:
+        print('\toverall_metrics/{}: {:.2f}'.format(key, sum(overall_metrics[key][start:end]) / (end-start)))
+    

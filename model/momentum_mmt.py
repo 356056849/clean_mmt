@@ -42,7 +42,253 @@ from utils.util import get_len_sequences
 logger = logging.getLogger(__name__)
 
 
-class MMTwins(BaseModel):
+class MomentumMMT(BaseModel):
+  def __init__(self,
+               l2renorm,
+               expert_dims,
+               tokenizer,
+               keep_missing_modalities,
+               test_caption_mode,
+               freeze_weights=False,
+               mimic_ce_dims=False,
+               concat_experts=False,
+               concat_mix_experts=False,
+               use_experts='origfeat',
+               rep_dim=2048,
+               proj_dim=8192,
+               K=4096,
+               m=0.999,
+               rep2mm_layer='none',
+               projector_layer='linear',
+               embd_out='avg',
+               txt_inp=None,
+               txt_agg=None,
+               txt_pro=None,
+               txt_wgh=None,
+               txt_ratio=1.0,
+               vid_inp=None,
+               vid_cont=None,
+               vid_wgh=None,
+               vid_ratio=1.0,
+               pos_enc=None,
+               out_tok=None,
+               use_mask='nomask',
+               same_dim=512,
+               vid_bert_params=None,
+               txt_bert_params=None,
+               agg_dims=None,
+               normalize_experts=True):
+    super().__init__()
+
+    print('Debug ---> create momentum_mmt .')
+
+    # hyper-parameters
+    print('Debug ---> set size of memory bank to {} .'.format(K))
+    print('Debug ---> set momentum coefficient to {} .'.format(m))
+    self.K = K
+    self.m = m
+
+    # create the encoders
+    print('Debug ---> create model with {} rep2mmsapce layer.'.format(rep2mm_layer))
+    print('Debug ---> create model with {} projector layer.'.format(projector_layer))
+    print('Debug ---> set dimension of representations to {} .'.format(rep_dim))
+    print('Debug ---> set dimension of projection to {} .'.format(proj_dim))
+    self.encoder_q = encoder(l2renorm=l2renorm,
+                            expert_dims=expert_dims,
+                            tokenizer=tokenizer,
+                            keep_missing_modalities=keep_missing_modalities,
+                            test_caption_mode=test_caption_mode,
+                            freeze_weights=freeze_weights,
+                            mimic_ce_dims=mimic_ce_dims,
+                            concat_experts=concat_experts,
+                            concat_mix_experts=concat_mix_experts,
+                            use_experts=use_experts,
+                            rep_dim=rep_dim,
+                            proj_dim=proj_dim,
+                            rep2mm_layer=rep2mm_layer,
+                            projector_layer=projector_layer,
+                            embd_out=embd_out,
+                            txt_inp=txt_inp,
+                            txt_agg=txt_agg,
+                            txt_pro=txt_pro,
+                            txt_wgh=txt_wgh,
+                            txt_ratio=txt_ratio,
+                            vid_inp=vid_inp,
+                            vid_cont=vid_cont,
+                            vid_wgh=vid_wgh,
+                            vid_ratio=vid_ratio,
+                            pos_enc=pos_enc,
+                            out_tok=out_tok,
+                            use_mask=use_mask,
+                            same_dim=same_dim,
+                            vid_bert_params=vid_bert_params,
+                            txt_bert_params=txt_bert_params,
+                            agg_dims=agg_dims,
+                            normalize_experts=normalize_experts)
+    self.encoder_k = encoder(l2renorm=l2renorm,
+                            expert_dims=expert_dims,
+                            tokenizer=tokenizer,
+                            keep_missing_modalities=keep_missing_modalities,
+                            test_caption_mode=test_caption_mode,
+                            freeze_weights=freeze_weights,
+                            mimic_ce_dims=mimic_ce_dims,
+                            concat_experts=concat_experts,
+                            concat_mix_experts=concat_mix_experts,
+                            use_experts=use_experts,
+                            rep_dim=rep_dim,
+                            proj_dim=proj_dim,
+                            rep2mm_layer=rep2mm_layer,
+                            projector_layer=projector_layer,
+                            embd_out=embd_out,
+                            txt_inp=txt_inp,
+                            txt_agg=txt_agg,
+                            txt_pro=txt_pro,
+                            txt_wgh=txt_wgh,
+                            txt_ratio=txt_ratio,
+                            vid_inp=vid_inp,
+                            vid_cont=vid_cont,
+                            vid_wgh=vid_wgh,
+                            vid_ratio=vid_ratio,
+                            pos_enc=pos_enc,
+                            out_tok=out_tok,
+                            use_mask=use_mask,
+                            same_dim=same_dim,
+                            vid_bert_params=vid_bert_params,
+                            txt_bert_params=txt_bert_params,
+                            agg_dims=agg_dims,
+                            normalize_experts=normalize_experts)
+    self.copyParamsFromQueryToKey()
+
+    # create queues
+    self.register_buffer("queue_txt", th.randn(proj_dim, K))
+    self.queue_txt = F.normalize(self.queue_txt, dim=-1)
+    self.register_buffer("queue_txt_ptr", th.zeros(1, dtype=th.long))
+    self.register_buffer("queue_vid", th.randn(proj_dim, K))
+    self.queue_vid = F.normalize(self.queue_vid, dim=-1)
+    self.register_buffer("queue_vid_ptr", th.zeros(1, dtype=th.long))
+
+  def forward(self,
+              token_ids,
+              features,
+              features_t,
+              features_ind,
+              features_avgpool,
+              features_maxpool,
+              query_masks,
+              out='conf',
+              device=None,
+              debug=None):
+
+    token_ids_key = token_ids.clone()
+    features_key = {key:features[key].clone() for key in features}
+    features_t_key = {key:features_t[key].clone() for key in features_t}
+    features_ind_key = {key:features_ind[key].clone() for key in features_ind}
+    features_avgpool_key = {key:features_avgpool[key].clone() for key in features_avgpool}
+    features_maxpool_key = {key:features_maxpool[key].clone() for key in features_maxpool}
+
+    q = self.encoder_q(token_ids=token_ids,  # tensor
+                      features=features,  # dict
+                      features_t=features_t,  # dict
+                      features_ind=features_ind,  # dict
+                      features_avgpool=features_avgpool,  # dict
+                      features_maxpool=features_maxpool,  # dict
+                      device=device,
+                      debug=debug)
+    
+    if out == 'embds':  # test stage
+      return {
+        "vid_reps": q['vid_reps'],
+        "text_reps": q['text_reps'],
+      }
+
+    # compute key features
+    with th.no_grad():  # no gradient to keys
+      self._momentum_update_key_encoder()  # update the key encoder
+      k = self.encoder_k(token_ids=token_ids_key,
+                        features=features_key,
+                        features_t=features_t_key,
+                        features_ind=features_ind_key,
+                        features_avgpool=features_avgpool_key,
+                        features_maxpool=features_maxpool_key,
+                        device=device,
+                        debug=debug)    
+    
+    q_vid, q_txt = q['vid_reps'], q['text_reps']
+    k_vid, k_txt = k['vid_reps'], k['text_reps']
+    cross_view_conf_matrix = q['cross_view_conf_matrix']
+    late_interaction_matrix = q['late_interaction_matrix']
+    
+    # compute logits
+    # normalize
+    q_vid = F.normalize(q_vid, dim=-1)
+    k_txt = F.normalize(k_txt, dim=-1)
+    q_txt = F.normalize(q_txt, dim=-1)
+    k_vid = F.normalize(k_vid, dim=-1)
+    # positive logits: Nx1
+    v2t_pos = th.einsum('nc,nc->n', [q_vid, k_txt]).unsqueeze(-1)
+    t2v_pos = th.einsum('nc,nc->n', [q_txt, k_vid]).unsqueeze(-1)
+    # negative logits: NxK
+    v2t_neg = th.einsum('nc,ck->nk', [q_vid, self.queue_txt.clone().detach()])
+    t2v_neg = th.einsum('nc,ck->nk', [q_txt, self.queue_vid.clone().detach()])
+    # logits: Nx(1+K)
+    v2t_logits = th.cat([v2t_pos, v2t_neg], dim=1)
+    t2v_logits = th.cat([t2v_pos, t2v_neg], dim=1)
+
+    # labels: positive key indicators 
+    v2t_labels = th.zeros(v2t_logits.shape[0], dtype=th.long).cuda()
+    t2v_labels = th.zeros(t2v_logits.shape[0], dtype=th.long).cuda()
+
+    # dequeue and enqueue
+    self._dequeue_and_enqueue(k_vid, 'vid')
+    self._dequeue_and_enqueue(k_txt, 'txt')
+  
+    return {
+      "v2t": {
+        "logits": v2t_logits,
+        "labels": v2t_labels,
+      },
+      "t2v": {
+        "logits": t2v_logits,
+        "labels": t2v_labels,
+      },
+      "cross_view_conf_matrix": cross_view_conf_matrix,
+      "late_interaction_matrix": late_interaction_matrix
+    } 
+
+  def copyParamsFromQueryToKey(self):
+    for param_q, param_k in zip(self.encoder_q.parameters(), self.encoder_k.parameters()):
+      param_k.data.copy_(param_q.data)  # initialize
+      param_k.requires_grad = False  # not update by gradient
+
+  @th.no_grad()
+  def _momentum_update_key_encoder(self):
+      """
+      Momentum update of the key encoder
+      """
+      for param_q, param_k in zip(self.encoder_q.parameters(), self.encoder_k.parameters()):
+          param_k.data = param_k.data * self.m + param_q.data * (1. - self.m)
+
+  @th.no_grad()
+  def _dequeue_and_enqueue(self, keys, mod):
+    assert mod in ['vid', 'txt']
+    batch_size = keys.shape[0]
+    assert self.K % batch_size == 0  # for simplicity
+
+    if mod == 'txt':
+      ptr = int(self.queue_txt_ptr)
+      # replace the keys at ptr (dequeue and enqueue)
+      self.queue_txt[:, ptr:ptr + batch_size] = keys.T
+      ptr = (ptr + batch_size) % self.K  # move pointer
+      self.queue_txt_ptr[0] = ptr
+    else:
+      ptr = int(self.queue_vid_ptr)
+      # replace the keys at ptr (dequeue and enqueue)
+      self.queue_vid[:, ptr:ptr + batch_size] = keys.T
+      ptr = (ptr + batch_size) % self.K  # move pointer
+      self.queue_vid_ptr[0] = ptr
+
+
+class encoder(BaseModel):
   """Whole cross-modal architecture."""
 
   def __init__(self,
@@ -56,17 +302,20 @@ class MMTwins(BaseModel):
                concat_experts=False,
                concat_mix_experts=False,
                use_experts='origfeat',
-               rep_dim=512,
-               proj_dim=1024,
-               txt_ratio=1,
-               vid_ratio=1,
+               rep_dim=2048,
+               proj_dim=8192,
+               rep2mm_layer='linear',
+               projector_layer='linear',
+               embd_out='avg',
                txt_inp=None,
                txt_agg=None,
                txt_pro=None,
                txt_wgh=None,
+               txt_ratio=1.0,
                vid_inp=None,
                vid_cont=None,
                vid_wgh=None,
+               vid_ratio=1.0,
                pos_enc=None,
                out_tok=None,
                use_mask='nomask',
@@ -108,6 +357,7 @@ class MMTwins(BaseModel):
     self.proj_dim = proj_dim
     self.txt_ratio = txt_ratio
     self.vid_ratio = vid_ratio
+    self.embd_out = embd_out
 
     self.video_dim_reduce = nn.ModuleDict()
     for mod in self.modalities:
@@ -184,11 +434,34 @@ class MMTwins(BaseModel):
       raise "Only Bert architecture can be employed for text"
 
     # compute representations
-    self.txt_token2rep = ReduceDim(text_dim, self.rep_dim)
-    self.vid_token2rep = ReduceDim(same_dim, self.rep_dim)
+    self.txt_token2rep = nn.Sequential(
+      #nn.Linear(text_dim, self.rep_dim, bias=False),
+      ReduceDim(text_dim, self.rep_dim)
+    )
+    self.vid_token2rep = nn.Sequential(
+      #nn.Linear(same_dim, self.rep_dim, bias=False),
+      ReduceDim(same_dim, self.rep_dim)
+    )
+
+    # project to multi-modal common space
+    #print('Debug ---> create model with {} rep2mmsapce layer.'.format(rep2mm_layer))
+    if rep2mm_layer == 'linear':
+      self.rep2mmspace = nn.Linear(self.rep_dim, self.rep_dim, bias=False)
+    elif rep2mm_layer == 'nonlinear':
+      self.rep2mmspace = nn.Sequential(
+        nn.Linear(self.rep_dim, self.rep_dim, bias=False),
+        nn.ReLU(inplace=True),
+        nn.Linear(self.rep_dim, self.rep_dim, bias=False)
+      )
+    elif rep2mm_layer == 'none':
+      self.rep2mmspace = nn.Identity()
 
     # projection head for contrastive learning
-    self.projector = Projector(self.rep_dim, self.proj_dim)
+    #print('Debug ---> create model with {} projector layer.'.format(projector_layer))
+    if projector_layer == 'linear':
+      self.projector = Projector([self.rep_dim, self.proj_dim])
+    elif projector_layer == 'nonlinear':
+      self.projector = Projector([self.rep_dim, self.rep_dim, self.proj_dim])
 
     # token weight generator
     self.txt_weight_generator = nn.Sequential(
@@ -209,8 +482,8 @@ class MMTwins(BaseModel):
       self.tokenizer = tokenizer
 
   def select_representative_tokens(self, embd, mod_type):
-    assert mod_type in ['text', 'video'], 'modality type must be text or video'
-    if mod_type == 'text':
+    assert mod_type in ['txt', 'vid'], 'modality type must be text or video'
+    if mod_type == 'txt':
       ratio = self.txt_ratio
       weights = self.txt_weight_generator(embd)
     else:
@@ -235,8 +508,6 @@ class MMTwins(BaseModel):
               features_ind,
               features_avgpool,
               features_maxpool,
-              query_masks,
-              out='conf',
               device=None,
               debug=None):
 
@@ -254,9 +525,6 @@ class MMTwins(BaseModel):
       pooled_experts[f'{mod}_maxpool'] = features_maxpool[mod]
 
     # Notation: B = batch size, M = number of modalities
-
-    # Output experts
-    experts = collections.OrderedDict()
 
     # Unroll repeated captions into present minibatch
     b, captions_per_video, max_text_words, feat_dim = token_ids.size()
@@ -294,18 +562,9 @@ class MMTwins(BaseModel):
       last_layer = txt_bert_output[0]  # [b, max_len, 768]
 
       # compute representations from bert output
-      text_reps = self.txt_token2rep(last_layer)  # [b, max_len, self.rep_dim]
+      text_reps = self.rep2mmspace(self.txt_token2rep(last_layer))  # [b, max_len, self.rep_dim]
       text_cls_rep = text_reps[:, 0]  # [b, self.rep_dim]
       text_token_rep = text_reps[:, 1:]  # [b, max_len-1, self.rep_dim]
-
-      # compute embeddings from text representations
-      #text_embds = self.projector(text_reps)  # [b, max_len, self.proj_dim]
-      #text_cls_embd = text_embds[:, 0]  # [b, self.proj_dim]
-      #text_token_embd = text_embds[:, 1:]  # [b, max_len-1, self.proj_dim]
-      #text_cls_embd = self.projector(text_cls_rep)
-
-      #text_avg_embd = th.mean(text_token_embd, dim=1)
-
 
     if self.vid_inp in ['agg', 'both', 'all']:
       agg_experts = collections.OrderedDict()
@@ -326,7 +585,7 @@ class MMTwins(BaseModel):
         layer = self.video_dim_reduce[mod]
         experts_feats[mod] = layer(experts_feats[mod])
 
-    # If Bert architecture is employed
+    # If Bert architecture is employed                                                  
     # ---------------------------------------------------------------------------- video encoder -----------------------
     if self.vid_cont == 'bert':
       # 0=[CLS] 1=[SEP] 2=[AGG] 3=[MAXP] 4=[MNP] 5=[VLAD] 6=[FEA]
@@ -427,52 +686,57 @@ class MMTwins(BaseModel):
                                       position_ids=position_ids,
                                       features=features)
 
-      last_layer = vid_bert_output[0]
+      last_layer = vid_bert_output[0]  # [b, max_len, same_dim]
 
       # compute representations from bert output
-      vid_reps = self.vid_token2rep(last_layer)  # [b, max_len, self.rep_dim]
+      vid_reps = self.rep2mmspace(self.vid_token2rep(last_layer))  # [b, max_len, self.rep_dim]
       vid_cls_rep = vid_reps[:, 0]  # [b, self.rep_dim]
       vid_token_rep = vid_reps[:, 1:]  # [b, max_len-1, self.rep_dim]
+      #vid_avg_pool_rep = th.mean(vid_token_rep, dim=1)  # [b, self.rep_dim]
 
-      # compute embeddings from video representations
-      #vid_embds = self.projector(vid_reps)
-      #vid_cls_embd = vid_embds[:, 0]  # [b, self.proj_dim]
-      #vid_token_embd = vid_embds[:, 1:]  # [b, max_len-1, self.proj_dim]
-      #vid_cls_embd = self.projector(vid_cls_rep)
+    # ---------------------------------------------------------------------------- rep to embd --------------------------
+    # select representive tokens
+    if self.txt_ratio == 1:
+      text_selective_token_rep = text_token_rep
+    else:
+      text_selective_token_rep = self.select_representative_tokens(text_token_rep, 'txt')
+    if self.vid_ratio == 1:
+      vid_selective_token_rep = vid_token_rep
+    else:
+      vid_selective_token_rep = self.select_representative_tokens(vid_token_rep, 'vid')
+    # average pooling
+    text_avg_pool_rep = th.mean(text_token_rep, dim=1)
+    vid_avg_pool_rep = th.mean(vid_token_rep, dim=1)
+    # compute embeddings from (selected) representations
+    if self.embd_out == 'avg':
+      text_embd = self.projector(text_avg_pool_rep)
+      vid_embd = self.projector(vid_avg_pool_rep)
+    else:
+      text_embd = self.projector(text_cls_rep)
+      vid_embd = self.projector(vid_cls_rep)
+    # late interaction (not needed here)
+    vid_selective_token_rep = self.projector(vid_selective_token_rep)
+    text_selective_token_rep = self.projector(text_selective_token_rep)
+    late_interaction_matrix = cpt_mean_maximum_similarity(vid_selective_token_rep, text_selective_token_rep)
 
-      #vid_avg_embd = th.mean(vid_token_embd, dim=1)
+    #vid_output_embd = F.normalize(vid_avg_pool_embd, dim=1)
+    #txt_output_embd = F.normalize(text_avg_pool_embd, dim=1)
+    vid_output_embd = vid_embd
+    txt_output_embd = text_embd
 
-    # ----------------------------------------------------------------------------- projection and fusion ---------------
-    # projection for contrastive learning
-    vid_cls_embd = self.projector(vid_cls_rep)
-    text_cls_embd = self.projector(text_cls_rep)
-
-    # select representative tokens
-    text_token_rep = self.select_representative_tokens(text_token_rep, "text")
-    vid_token_rep = self.select_representative_tokens(vid_token_rep, "video")
-    # token-wise late interaction 
-    #with th.no_grad():
-    vid_token_embd = self.projector(vid_token_rep)
-    text_token_embd = self.projector(text_token_rep)
-    mean_max_similarity = cpt_mean_maximum_similarity(vid_token_embd, text_token_embd)
-
-    if out == 'conf':  # Output confusion matrix
-      cross_view_conf_matrix = sharded_cross_view_inner_product(
-          vid_rep=vid_cls_embd,
-          txt_rep=text_cls_embd,
+    cross_view_conf_matrix = sharded_cross_view_inner_product(
+          vid_rep=vid_output_embd,
+          txt_rep=txt_output_embd,
           subspaces=self.modalities
       )
-      return {
-          'modalities': self.modalities,
-          'cross_view_conf_matrix': cross_view_conf_matrix,
-          'late_interaction_matrix': mean_max_similarity
-      }
-    else:  # Output the embeddings
-      return {
-          'vid_reps': vid_cls_embd,
-          'text_reps': text_cls_embd,
-      }
 
+    return {
+          'vid_reps': vid_output_embd,
+          'text_reps': txt_output_embd,
+          'cross_view_conf_matrix': cross_view_conf_matrix,
+          'late_interaction_matrix': late_interaction_matrix
+    }
+    
 
 class ReduceDim(nn.Module):
 
@@ -485,9 +749,10 @@ class ReduceDim(nn.Module):
     x = F.normalize(x, dim=-1)
     return x
 
+
 def sharded_cross_view_inner_product(vid_rep,
                                      txt_rep,
-                                     subspaces):
+                                     subspaces=None):
   """Compute similarities between all captions and videos."""
   b = vid_rep.shape[0]
   num_caps = txt_rep.shape[0] // b
@@ -504,7 +769,8 @@ def sharded_cross_view_inner_product(vid_rep,
   return sims
 
 def cpt_mean_maximum_similarity(vid_rep,
-                                txt_rep):
+                                txt_rep,
+                                subspaces=None):
   # vid_rep: [b, 218, 512]
   # txt_rep: [b, 30, 512]
   """
@@ -530,7 +796,7 @@ def cpt_mean_maximum_similarity(vid_rep,
   sim = sim.view(txt_bs, txt_n_tokens, vid_bs, vid_n_tokens)  # [bs, 218, bs, 30]
   t2v = th.mean(th.max(sim, dim=-1)[0], dim=1)  # [bs, bs]
   v2t = th.mean(th.max(sim, dim=1)[0], dim=-1)  # [bs, bs]
-  
+
   return {
     "t2v": t2v,
     "v2t": v2t
@@ -546,26 +812,23 @@ def cpt_cross_corrletaion_matrix(vid_embd_CL,
   b, d = vid_embd_CL.shape
   num_caps = txt_embd_CL.shape[0] // b
 
-  txt_rep_norm = F.normalize(txt_embd_CL, dim=0)
-  vid_rep_norm = F.normalize(vid_embd_CL, dim=0)
+  #txt_rep_norm = F.normalize(txt_embd_CL, dim=0)
+  #vid_rep_norm = F.normalize(vid_embd_CL, dim=0)
 
   if num_caps == 1: 
-    cross_corr_mat = txt_rep_norm.T @ vid_rep_norm
+    cross_corr_mat = txt_embd_CL.T @ vid_embd_CL
   elif num_caps > 1:
-    txt_rep_norm = txt_rep_norm.view(b, num_caps, -1)
+    txt_embd_CL = txt_embd_CL.view(b, num_caps, -1)
     cross_corr_mat = th.zeros(d, d).to(vid_embd_CL.device)
     for i in range(num_caps):
-      cross_corr_mat += (txt_rep_norm[:, i, :].T @ vid_rep_norm)
+      cross_corr_mat += (txt_embd_CL[:, i, :].T @ vid_embd_CL)
     cross_corr_mat /= num_caps
 
   return cross_corr_mat
 
 class Projector(nn.Module):
-  def __init__(self, rep_dim, proj_dim):
+  def __init__(self, sizes):
     super().__init__()
-    self.rep_dim = rep_dim
-    self.proj_dim = proj_dim
-    sizes = [self.rep_dim, self.rep_dim, self.proj_dim]
     layers = []
     for i in range(len(sizes) - 2):
         layers.append(nn.Linear(sizes[i], sizes[i + 1], bias=False))
@@ -577,4 +840,3 @@ class Projector(nn.Module):
   def forward(self, token_embds):
     embd_cl = self.projector(token_embds)
     return embd_cl
-

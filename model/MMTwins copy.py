@@ -56,21 +56,21 @@ class MMTwins(BaseModel):
                concat_experts=False,
                concat_mix_experts=False,
                use_experts='origfeat',
-               rep_dim=512,
-               proj_dim=1024,
-               txt_ratio=1,
-               vid_ratio=1,
                txt_inp=None,
                txt_agg=None,
                txt_pro=None,
                txt_wgh=None,
+               txt_ratio=1.0,
                vid_inp=None,
                vid_cont=None,
                vid_wgh=None,
+               vid_ratio=1.0,
                pos_enc=None,
                out_tok=None,
                use_mask='nomask',
                same_dim=512,
+               rep_dim=512,
+               proj_dim=1024,
                vid_bert_params=None,
                txt_bert_params=None,
                agg_dims=None,
@@ -184,8 +184,8 @@ class MMTwins(BaseModel):
       raise "Only Bert architecture can be employed for text"
 
     # compute representations
-    self.txt_token2rep = ReduceDim(text_dim, self.rep_dim)
-    self.vid_token2rep = ReduceDim(same_dim, self.rep_dim)
+    self.txt_token2rep = nn.Linear(text_dim, self.rep_dim, bias=False)
+    self.vid_token2rep = nn.Linear(same_dim, self.rep_dim, bias=False)
 
     # projection head for contrastive learning
     self.projector = Projector(self.rep_dim, self.proj_dim)
@@ -193,15 +193,11 @@ class MMTwins(BaseModel):
     # token weight generator
     self.txt_weight_generator = nn.Sequential(
       nn.Dropout(0.1),
-      nn.Linear(self.rep_dim, 128),
-      nn.ReLU(inplace=True),
-      nn.Linear(128, 1)
+      nn.Linear(self.rep_dim, 1)
     )
     self.vid_weight_generator = nn.Sequential(
       nn.Dropout(0.1),
-      nn.Linear(self.rep_dim, 128),
-      nn.ReLU(inplace=True),
-      nn.Linear(128, 1)
+      nn.Linear(self.rep_dim, 1)
     )
 
     self.debug_dataloader = False
@@ -302,7 +298,7 @@ class MMTwins(BaseModel):
       #text_embds = self.projector(text_reps)  # [b, max_len, self.proj_dim]
       #text_cls_embd = text_embds[:, 0]  # [b, self.proj_dim]
       #text_token_embd = text_embds[:, 1:]  # [b, max_len-1, self.proj_dim]
-      #text_cls_embd = self.projector(text_cls_rep)
+      text_cls_embd = self.projector(text_cls_rep)
 
       #text_avg_embd = th.mean(text_token_embd, dim=1)
 
@@ -438,14 +434,51 @@ class MMTwins(BaseModel):
       #vid_embds = self.projector(vid_reps)
       #vid_cls_embd = vid_embds[:, 0]  # [b, self.proj_dim]
       #vid_token_embd = vid_embds[:, 1:]  # [b, max_len-1, self.proj_dim]
-      #vid_cls_embd = self.projector(vid_cls_rep)
+      vid_cls_embd = self.projector(vid_cls_rep)
 
       #vid_avg_embd = th.mean(vid_token_embd, dim=1)
 
-    # ----------------------------------------------------------------------------- projection and fusion ---------------
+      """
+      for _, modality in enumerate(self.modalities):
+        experts[modality] = last_layer[:, modality_to_tok_map[modality]]
+      """
+
+    """
+    if self.vid_wgh == 'nrm':
+      vid_weights = self.compute_weights_from_norm(experts)
+    elif self.vid_wgh == 'emb':
+      vid_weights = self.compute_weights_from_emb(vid_embd)
+    elif self.vid_wgh == 'none':
+      vid_weights = th.ones(b, m).to(device)
+    else:
+      msg = 'video weighting mode {} not supported'
+      raise NotImplementedError(msg.format(self.vid_wgh))
+
+    if not self.keep_missing_modalities:
+      # Zero padding of the missing modalities
+      available = th.zeros(b, m).to(device)
+      for idx, mod in enumerate(self.modalities):
+        available[:, idx] = ind[mod].float()  # B x M
+      vid_weights = vid_weights * available
+
+    # Normalize video weights so that they sum to one
+    vid_weights = nn.functional.normalize(vid_weights, p=1, dim=-1)
+
+    if self.txt_wgh == 'emb':
+      text_weights = self.compute_weights_from_emb(text)
+    elif self.txt_wgh == 'none':
+      text_weights = th.ones(b, captions_per_video, m).to(device)
+    else:
+      msg = 'txt weighting mode {} not supported'
+      raise NotImplementedError(msg.format(self.txt_wgh))
+
+    # Normalize text weights so that they sum to one
+    text_weights = nn.functional.normalize(text_weights, p=1, dim=-1)
+    """
+
     # projection for contrastive learning
-    vid_cls_embd = self.projector(vid_cls_rep)
-    text_cls_embd = self.projector(text_cls_rep)
+    #vid_embd_CL = self.projector(vid_reps)
+    #txt_embd_CL = self.projector(txt_reps)
 
     # select representative tokens
     text_token_rep = self.select_representative_tokens(text_token_rep, "text")
@@ -473,6 +506,59 @@ class MMTwins(BaseModel):
           'text_reps': text_cls_embd,
       }
 
+  def display_minibatch(self, token_ids, input_ids, attention_mask,
+                        token_type_ids, position_ids, features):
+    for i in range(1):
+      logger.debug()
+      # logger.debug(f'Sample {i}:')
+      logger.debug('Text:')
+      ids = token_ids[i, 0, :, 0].cpu().numpy()
+      logger.debug(ids)
+
+      tokens = self.tokenizer.convert_ids_to_tokens(ids)
+      logger.debug(tokens)
+
+      logger.debug('Video:')
+      # logger.debug(f'input_ids: {input_ids[i]}')
+      # logger.debug(f'attention_mask: {attention_mask[i]}')
+      # logger.debug(f'token_type_ids: {token_type_ids[i]}')
+      # logger.debug(f'position_ids: {position_ids[i]}')
+      logger.debug(features[i].shape)
+
+
+class GatedEmbeddingUnit(nn.Module):
+  """Gated embedding module.
+
+  as described in
+  "Learning a Text-Video Embedding from Incomplete and Heterogeneous Data"
+  """
+
+  def __init__(self, input_dimension, output_dimension, use_bn, normalize):
+    super(GatedEmbeddingUnit, self).__init__()
+
+    self.fc = nn.Linear(input_dimension, output_dimension)
+    self.cg = ContextGating(output_dimension, add_batch_norm=use_bn)
+    self.normalize = normalize
+
+  def forward(self, x):
+    x = self.fc(x)
+    x = self.cg(x)
+    if self.normalize:
+      x = F.normalize(x, dim=-1)
+    return x
+
+
+class MimicCEGatedEmbeddingUnit(nn.Module):
+
+  def __init__(self, input_dimension, output_dimension, use_bn):
+    super().__init__()
+    self.cg = ContextGating(input_dimension, add_batch_norm=use_bn)
+
+  def forward(self, x):
+    x = self.cg(x)
+    x = F.normalize(x, dim=-1)
+    return x
+
 
 class ReduceDim(nn.Module):
 
@@ -484,6 +570,67 @@ class ReduceDim(nn.Module):
     x = self.fc(x)
     x = F.normalize(x, dim=-1)
     return x
+
+
+class GatedLinearUnit(nn.Module):
+
+  def forward(self, x, mask):
+    x = th.cat((x, mask), 1)
+    return F.glu(x, 1)
+
+
+class ContextGating(nn.Module):
+  """Context gating class."""
+
+  def __init__(self, dimension, add_batch_norm=True):
+    super(ContextGating, self).__init__()
+    self.fc = nn.Linear(dimension, dimension)
+    self.add_batch_norm = add_batch_norm
+    self.batch_norm = nn.BatchNorm1d(dimension)
+
+  def forward(self, x):
+    x1 = self.fc(x)
+    if self.add_batch_norm:
+      x1 = self.batch_norm(x1)
+    x = th.cat((x, x1), 1)  # x [b, 1024]
+    return F.glu(x, 1)  # return [b, 512]
+
+
+class GatedEmbeddingUnitReasoning(nn.Module):
+
+  def __init__(self, output_dimension):
+    super(GatedEmbeddingUnitReasoning, self).__init__()
+    self.cg = ContextGatingReasoning(output_dimension)
+
+  def forward(self, x, mask):
+    x = self.cg(x, mask)
+    x = F.normalize(x, dim=-1)
+    return x
+
+
+class ContextGatingReasoning(nn.Module):
+  """Context gating reasoning class."""
+
+  def __init__(self, dimension, add_batch_norm=True):
+    super(ContextGatingReasoning, self).__init__()
+    self.fc = nn.Linear(dimension, dimension)
+    self.add_batch_norm = add_batch_norm
+    self.batch_norm = nn.BatchNorm1d(dimension)
+    self.batch_norm2 = nn.BatchNorm1d(dimension)
+
+  def forward(self, x, x1):
+
+    x2 = self.fc(x)
+
+    if self.add_batch_norm:
+      x1 = self.batch_norm(x1)
+      x2 = self.batch_norm2(x2)
+
+    t = x1 + x2
+
+    x = th.cat((x, t), 1)
+    return F.glu(x, 1)
+
 
 def sharded_cross_view_inner_product(vid_rep,
                                      txt_rep,
@@ -536,6 +683,7 @@ def cpt_mean_maximum_similarity(vid_rep,
     "v2t": v2t
   }
 
+
 def cpt_cross_corrletaion_matrix(vid_embd_CL,
                                  txt_embd_CL,
                                  subspaces):
@@ -560,16 +708,33 @@ def cpt_cross_corrletaion_matrix(vid_embd_CL,
 
   return cross_corr_mat
 
+
+class RepTokenSelector(nn.Module):
+  def __init__(self, in_dim, ratio):
+    super().__init__()
+    self.w_generator = nn.Sequential(
+      nn.Dropout(0.1),
+      nn.Linear(in_dim, 1),
+      nn.Softmax()
+    )
+    self.n_tokens = in_dim // ratio
+
+  def forwad(self, token_embd):
+    weights = self.w_generator(token_embd)
+    rep_tokens_id = th.topk(weights, largest=True, k=self.n_tokens)[1]
+    rep_tokens_id = th.sort(rep_tokens_id, dim=1)[0]
+
+
 class Projector(nn.Module):
   def __init__(self, rep_dim, proj_dim):
     super().__init__()
     self.rep_dim = rep_dim
     self.proj_dim = proj_dim
-    sizes = [self.rep_dim, self.rep_dim, self.proj_dim]
+    sizes = [self.rep_dim, self.proj_dim]
     layers = []
     for i in range(len(sizes) - 2):
         layers.append(nn.Linear(sizes[i], sizes[i + 1], bias=False))
-        #layers.append(nn.BatchNorm1d(sizes[i + 1]))
+        layers.append(nn.BatchNorm1d(sizes[i + 1]))
         layers.append(nn.ReLU(inplace=True))
     layers.append(nn.Linear(sizes[-2], sizes[-1], bias=False))
     self.projector = nn.Sequential(*layers)

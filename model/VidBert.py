@@ -279,11 +279,16 @@ class BertEncoder(nn.Module):
       if self.output_attentions:
         all_attentions = all_attentions + (layer_outputs[1],)
 
+      # add first layer as feature-level token embeddings
+      if i == 0:
+        feature_level_embds = hidden_states
+      #hi_features.append(feature_level_embds)
+
     # Add last layer
     if self.output_hidden_states:
       all_hidden_states = all_hidden_states + (hidden_states,)
 
-    outputs = (hidden_states,)
+    outputs = (hidden_states, feature_level_embds)
     if self.output_hidden_states:
       outputs = outputs + (all_hidden_states,)
     if self.output_attentions:
@@ -403,12 +408,14 @@ class BertModel(nn.Module):
     encoder_outputs = self.encoder(embedding_output,
                                    extended_attention_mask,
                                    head_mask=head_mask)
-    sequence_output = encoder_outputs[0]
+    # encoder_outputs = tuple(semantic_token_embeddings, feature_token_embeddings)
+    sequence_output = encoder_outputs[0]  # sequence_output is semantic token embeddings: [128, 30, 768]
+    feature_output = encoder_outputs[1]  # [128, 30, 768]
     pooled_output = self.pooler(sequence_output)
 
     outputs = (
         sequence_output,
         pooled_output,
-    ) + encoder_outputs[1:]  # add hidden_states and attentions if they are here
+        feature_output)  # add hidden_states and attentions if they are here
     # sequence_output, pooled_output, (hidden_states), (attentions)
     return outputs

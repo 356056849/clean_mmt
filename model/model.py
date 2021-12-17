@@ -29,7 +29,7 @@ import re
 import types
 
 from base import BaseModel
-from model.bert import BertModel
+from model.VidBert import BertModel
 from model.lstm import LSTMModel
 from model.net_vlad import NetVLAD
 from model.txt_embeddings import TxtEmbeddings

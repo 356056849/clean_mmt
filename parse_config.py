@@ -71,7 +71,15 @@ class ConfigParser:
       exper_name = self.config['exp_name']
     else:
       exper_name = pathlib.Path(args.config).stem
-      self._config['exp_name'] = exper_name
+      # self._config['exp_name'] = exper_name
+      parent_dir = str(pathlib.Path(args.config).parent).split('/')
+      parent_dir = parent_dir[parent_dir.index('configs_pub')+1:]
+      self._config['exp_name'] = '/'.join(parent_dir + [exper_name])
+      exper_name = '/'.join(parent_dir + [exper_name])
+      if os.path.dirname(self._config['exp_name']):
+        if not os.path.exists(os.path.join('exps', os.path.dirname(self._config['exp_name']))):
+          os.makedirs(os.path.join('exps', os.path.dirname(self._config['exp_name'])))
+      
 
     # set save_dir where trained model and log will be saved.
     if 'save_dir' in self.config['trainer'].keys():
