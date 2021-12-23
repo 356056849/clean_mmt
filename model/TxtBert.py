@@ -24,7 +24,7 @@ class BertEncoder(nn.Module):
         output_hidden_states=False,
         return_dict=False,
     ):  
-
+        output_hidden_states = True
         all_hidden_states = () if output_hidden_states else None
         all_attentions = () if output_attentions else None
         for i, layer_module in enumerate(self.layer):
@@ -69,8 +69,12 @@ class BertEncoder(nn.Module):
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states,)
 
+        if not (feature_level_embd == all_hidden_states[1]).all():
+            print('error')
+            exit(0)
+            
         if not return_dict:
-            return tuple(v for v in [hidden_states, all_hidden_states, all_attentions, feature_level_embd] if v is not None)
+            return tuple(v for v in [hidden_states, all_hidden_states, all_attentions] if v is not None)
         return BaseModelOutput(
             last_hidden_state=hidden_states, hidden_states=all_hidden_states, attentions=all_attentions
         )

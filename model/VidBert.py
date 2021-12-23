@@ -262,7 +262,7 @@ class BertEncoder(nn.Module):
   def __init__(self, config):
     super(BertEncoder, self).__init__()
     self.output_attentions = False
-    self.output_hidden_states = False
+    self.output_hidden_states = True
     self.layer = nn.ModuleList(
         [BertLayer(config) for _ in range(config.num_hidden_layers)])
 
@@ -281,19 +281,22 @@ class BertEncoder(nn.Module):
 
       # add first layer as feature-level token embeddings
       if i == 0:
-        feature_level_embds = hidden_states
+        feature_level_embd = hidden_states
       #hi_features.append(feature_level_embds)
 
     # Add last layer
     if self.output_hidden_states:
       all_hidden_states = all_hidden_states + (hidden_states,)
 
-    outputs = (hidden_states, feature_level_embds)
+    outputs = (hidden_states, )
     if self.output_hidden_states:
       outputs = outputs + (all_hidden_states,)
     if self.output_attentions:
       outputs = outputs + (all_attentions,)
     # last-layer hidden state, (all hidden states), (all attentions)
+    if not (feature_level_embd == all_hidden_states[1]).all():
+      print('error')
+      exit(0)
     return outputs
 
 
@@ -410,12 +413,12 @@ class BertModel(nn.Module):
                                    head_mask=head_mask)
     # encoder_outputs = tuple(semantic_token_embeddings, feature_token_embeddings)
     sequence_output = encoder_outputs[0]  # sequence_output is semantic token embeddings: [128, 30, 768]
-    feature_output = encoder_outputs[1]  # [128, 30, 768]
+    hierachical_output = encoder_outputs[1]  # [128, 30, 768]
     pooled_output = self.pooler(sequence_output)
 
     outputs = (
         sequence_output,
         pooled_output,
-        feature_output)  # add hidden_states and attentions if they are here
+        hierachical_output)  # add hidden_states and attentions if they are here
     # sequence_output, pooled_output, (hidden_states), (attentions)
     return outputs

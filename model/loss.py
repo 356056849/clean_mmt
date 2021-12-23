@@ -255,25 +255,26 @@ class RawMixLoss(nn.Module):
 
 
 class HiMixLoss(nn.Module):
-  def __init__(self, temperature=0.07, lambd=0.00, start_distill_epoch=10, feature_loss_weight=0):
+  def __init__(self, temperature=0.07, lambd=0.00, start_distill_epoch=10, loss_weights=0):
     super().__init__()
     self.ce_loss = th.nn.CrossEntropyLoss()
-    self.kl_loss = th.nn.functional.kl_div
+    self.kl_loss = nn.KLDivLoss()
     self.T = temperature
     self.lambd = lambd
     self.start_distill_epoch = start_distill_epoch
-    self.feature_loss_weight = feature_loss_weight
+    self.loss_weights = loss_weights
 
-  def forward(self, global_conf_mat, token_wise_conf_mat, distill=False):
-    global_conf_mat /= self.T
-    n = global_conf_mat.size()[0]
-    target = th.arange(n).to(global_conf_mat.device)
+  def forward(self, cross_view_conf_matrix, late_interaction_matrix, distill=False):
+    cross_view_conf_matrix /= self.T
 
-    t2v_conf_mat = global_conf_mat 
-    v2t_conf_mat = th.transpose(global_conf_mat, 0, 1)
+    n = cross_view_conf_matrix.size()[0]
+    target = th.arange(n).to(cross_view_conf_matrix.device)
 
-    t2v_soft_target = F.softmax(token_wise_conf_mat["t2v"], dim=-1)
-    v2t_soft_target = F.softmax(token_wise_conf_mat["v2t"], dim=-1)
+    t2v_conf_mat = cross_view_conf_matrix 
+    v2t_conf_mat = th.transpose(cross_view_conf_matrix, 0, 1)
+
+    t2v_soft_target = F.softmax(late_interaction_matrix["t2v"], dim=-1)
+    v2t_soft_target = F.softmax(late_interaction_matrix["v2t"], dim=-1)
 
     global_loss = self.ce_loss(t2v_conf_mat, target) + self.ce_loss(v2t_conf_mat, target)
     if not distill:

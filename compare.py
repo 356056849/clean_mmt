@@ -1,7 +1,7 @@
 import os
 
 #epoch_range = (19, 29)
-exp_dir = 'exps/HiEMMT/avg_t50v20_none_linear_SD0_512to1024_sanity_check2'
+exp_dir = 'exps/HiSD_check/sanity_check1'
 
 log_path = os.path.join(exp_dir, 'log.txt')
 with open(log_path, 'r') as f:

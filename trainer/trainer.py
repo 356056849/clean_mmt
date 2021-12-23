@@ -137,6 +137,7 @@ class Trainer(BaseTrainer):
     self.already_print_log = False
 
     # add loss type config
+    self.kl_loss = nn.KLDivLoss()
     if isinstance(self.loss, RawMixLoss):
       self.which_loss = 'RawMixLoss'
     elif isinstance(self.loss, MomentumMixLoss):
@@ -145,11 +146,11 @@ class Trainer(BaseTrainer):
       self.which_loss = 'DCLMixLoss'
     elif isinstance(self.loss, HiMixLoss):
       self.which_loss = 'HiMixLoss'
-      self.feature_loss_weight = self.loss.feature_loss_weight
+      self.loss_weights = self.loss.loss_weights
     else:
       raise 'loss config error'
     if self.which_loss == 'HiMixLoss':
-      print('Debug ---> use {} as objection function with weights {}.'.format(self.which_loss, self.feature_loss_weight))
+      print('Debug ---> use {} as objection function with weights {}.'.format(self.which_loss, self.loss_weights))
     else:
       print('Debug ---> use {} as objection function.'.format(self.which_loss))
 
@@ -253,13 +254,29 @@ class Trainer(BaseTrainer):
         late_interaction_matrix = output["late_interaction_matrix"]
         loss = self.loss(vid_embds, txt_embds, late_interaction_matrix, distill=distill)
       elif self.which_loss == 'HiMixLoss':
+        # semantic
         cross_view_conf_matrix_semantic = output["cross_view_conf_matrix_semantic"]
         late_interaction_matrix_semantic = output["late_interaction_matrix_semantic"]
         semantic_loss = self.loss(cross_view_conf_matrix_semantic, late_interaction_matrix_semantic, distill=distill)
+        # feature
         cross_view_conf_matrix_feature = output["cross_view_conf_matrix_feature"]
         late_interaction_matrix_feature = output["late_interaction_matrix_feature"]
         feature_loss = self.loss(cross_view_conf_matrix_feature, late_interaction_matrix_feature, distill=distill)
-        loss = semantic_loss + self.feature_loss_weight * feature_loss
+        feature_loss += 30 * self.kl_loss(
+          F.log_softmax(cross_view_conf_matrix_feature / 0.07, dim=-1),
+          F.softmax(cross_view_conf_matrix_semantic, dim=-1)
+        )
+        # middle
+        if 'cross_view_conf_matrix_middle' and 'late_interaction_matrix_middle' in output:
+          cross_view_conf_matrix_middle = output["cross_view_conf_matrix_middle"]
+          late_interaction_matrix_middle = output["late_interaction_matrix_middle"]
+          middle_loss = self.loss(cross_view_conf_matrix_middle, late_interaction_matrix_middle, distill=distill)
+          loss = self.loss_weights[-1] * semantic_loss + self.loss_weights[1] * middle_loss + self.loss_weights[0] * feature_loss
+        else:
+          loss = self.loss_weights[-1] * semantic_loss + self.loss_weights[0] * feature_loss
+        # total loss
+        # loss = self.loss_weights[-1] * semantic_loss + self.loss_weights[0] * feature_loss
+        # loss = self.loss_weights[-1] * semantic_loss + self.loss_weights[1] * middle_a_loss + self.loss_weights[0] * feature_loss
         """
         cross_view_conf_matrix = output["cross_view_conf_matrix"]
         late_interaction_matrix = output["late_interaction_matrix"]
@@ -463,6 +480,7 @@ class Trainer(BaseTrainer):
             txt_rep=embds["text_reps"],
             subspaces=self.modalities
         )
+        """
         # debug corr mat ----------------------------------
         corrletaion_matrix = self.cpt_cross_corrletaion_matrix(
           vid_embd_CL=embds["vid_reps"],
@@ -479,6 +497,7 @@ class Trainer(BaseTrainer):
         norm_conf = (cross_view_conf_matrix - min_val) / (max_val - min_val)
         save_image(norm_conf, os.path.join(exp_dir, 'debug/conf_mat_{}.jpg'.format(epoch)))
         # debug corr mat ----------------------------------
+        """
         sims = cross_view_conf_matrix.data.cpu().float().numpy()
         query_masks = embds["query_masks"].numpy()
 
